@@ -78,8 +78,10 @@
         "compile": "tsc -p ./",
         "watch": "tsc -watch -p ./",
         "postinstall": "node ./node_modules/vscode/bin/install",
-        "test": "npm run compile && node ./node_modules/vscode/bin/test"
+        "test": "npm run compile && node ./node_modules/vscode/bin/test",
+        "vsix": "npx vsce package"
     },
+
     "devDependencies": {
         "@types/jest": "^29.5.10",
         "@types/node": "20.10.0",

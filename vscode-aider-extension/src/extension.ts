@@ -167,32 +167,96 @@ vscode.workspace.onDidChangeConfiguration((e) => {
 });
 
 export function activate(context: vscode.ExtensionContext) {
-    vscode.workspace.onDidOpenTextDocument((document) => {
+    // Register command to open AiderPanel Webview
+    const aiderPanelDisposable = vscode.commands.registerCommand('aider.openPanel', () => {
+        // Use extensionPath for compatibility
+        const extensionUri = vscode.Uri.file(context.extensionPath);
+        // Lazy import to avoid circular dependency
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { AiderPanel } = require('./AiderPanel');
+        AiderPanel.createOrShow(extensionUri);
+    });
+    context.subscriptions.push(aiderPanelDisposable);
+    // Helper to get all open files (textDocuments + visibleTextEditors)
+    function getAllOpenFiles(): Set<string> {
+        const files = new Set<string>();
+        vscode.workspace.textDocuments.forEach((doc: vscode.TextDocument) => {
+            if (doc.uri.scheme === "file" && doc.fileName && aider?.isWorkspaceFile(doc.fileName)) {
+                files.add(doc.fileName);
+            }
+        });
+        vscode.window.visibleTextEditors.forEach((editor: vscode.TextEditor) => {
+            const doc = editor.document;
+            if (doc.uri.scheme === "file" && doc.fileName && aider?.isWorkspaceFile(doc.fileName)) {
+                files.add(doc.fileName);
+            }
+        });
+        return files;
+    }
+
+    // On activation, sync all open files
+    function initialSyncFiles() {
+        if (aider) {
+            const files = getAllOpenFiles();
+            let ignoreFiles = vscode.workspace.getConfiguration('aider').get('ignoreFiles') as string[];
+            let ignoreFilesRegex = ignoreFiles.map((regex) => new RegExp(regex));
+            const filtered = [...files].filter((item) => !ignoreFilesRegex.some((regex) => regex.test(item)));
+            aider.addFiles(filtered);
+            filtered.forEach(f => filesThatAiderKnows.add(f));
+        }
+    }
+
+    vscode.workspace.onDidOpenTextDocument((document: vscode.TextDocument) => {
         if (aider) {
             if (document.uri.scheme === "file" && document.fileName && aider.isWorkspaceFile(document.fileName)) {
                 let filePath = document.fileName;
                 let ignoreFiles = vscode.workspace.getConfiguration('aider').get('ignoreFiles') as string[];
                 let shouldIgnore = ignoreFiles.some((regex) => new RegExp(regex).test(filePath));
-
-                if (!shouldIgnore) {
+                if (!shouldIgnore && !filesThatAiderKnows.has(filePath)) {
                     aider.addFile(filePath);
-                    filesThatAiderKnows.add(document.fileName);
+                    filesThatAiderKnows.add(filePath);
                 }
             }
         }
     });
-    vscode.workspace.onDidCloseTextDocument((document) => {
+    vscode.workspace.onDidCloseTextDocument((document: vscode.TextDocument) => {
         if (aider) {
             if (document.uri.scheme === "file" && document.fileName && aider.isWorkspaceFile(document.fileName)) {
                 let filePath = document.fileName;
                 let ignoreFiles = vscode.workspace.getConfiguration('aider').get('ignoreFiles') as string[];
                 let shouldIgnore = ignoreFiles.some((regex) => new RegExp(regex).test(filePath));
-
-                if (!shouldIgnore) {
+                if (!shouldIgnore && filesThatAiderKnows.has(filePath)) {
                     aider.dropFile(filePath);
-                    filesThatAiderKnows.delete(document.fileName);
+                    filesThatAiderKnows.delete(filePath);
                 }
             }
+        }
+    });
+
+    // Listen for visible tab changes (e.g., tabs restored on startup)
+    vscode.window.onDidChangeVisibleTextEditors(() => {
+        if (aider) {
+            const files = getAllOpenFiles();
+            let ignoreFiles = vscode.workspace.getConfiguration('aider').get('ignoreFiles') as string[];
+            let ignoreFilesRegex = ignoreFiles.map((regex) => new RegExp(regex));
+            // Add newly visible files
+            [...files].forEach(file => {
+                if (!filesThatAiderKnows.has(file) && !ignoreFilesRegex.some((regex) => regex.test(file))) {
+                    if (aider) {
+                        aider.addFile(file);
+                        filesThatAiderKnows.add(file);
+                    }
+                }
+            });
+            // Drop files no longer visible
+            [...filesThatAiderKnows].forEach(file => {
+                if (!files.has(file) && !ignoreFilesRegex.some((regex) => regex.test(file))) {
+                    if (aider) {
+                        aider.dropFile(file);
+                        filesThatAiderKnows.delete(file);
+                    }
+                }
+            });
         }
     });
 
@@ -212,6 +276,7 @@ export function activate(context: vscode.ExtensionContext) {
         // Send the "/add <filename>" command to the Aider process
         if (aider) {
             filesThatAiderKnows.add(filePath);
+    // On aider.open, do initial sync
             aider.addFile(filePath);
         }
     });
@@ -220,19 +285,20 @@ export function activate(context: vscode.ExtensionContext) {
 
     disposable = vscode.commands.registerCommand('aider.debugInfo', function () {
         console.log(`===============================`)
+            initialSyncFiles();
         console.log(`Working directory: ${calculatedWorkingDirectory}`);
         console.log(`Config working directory: ${vscode.workspace.getConfiguration('aider').get('workingDirectory')}`);
         console.log(`Files that aider knows about:`);
-        filesThatAiderKnows.forEach((file) => {
+        filesThatAiderKnows.forEach((file: string) => {
             console.log(`  ${file}`);
         });
         console.log(`Aider object: ${aider}`);
         console.log(`VSCode Workspace Files:`);
-        vscode.workspace.textDocuments.forEach((document) => {
+        vscode.workspace.textDocuments.forEach((document: vscode.TextDocument) => {
             console.log(`  ${document.fileName}`);
         });
         console.log(`VSCode Active Tab Files:`);
-        vscode.window.visibleTextEditors.forEach((editor) => {
+        vscode.window.visibleTextEditors.forEach((editor: vscode.TextEditor) => {
             console.log(`  ${editor.document.fileName}`);
         });
         console.log(`===============================`)
